@@ -418,30 +418,48 @@ class DisponibilidadeScraper:
                     page.wait_for_timeout(1000)
                 
                 # Selecionar "Endocrinologia Geral" (aparece como cura-select-option)
+                specialty_selected = False
                 try:
-                    page.click(f"text={ESPECIALIDADE}")
-                    logger.info(f"  ✓ Especialidade '{ESPECIALIDADE}' selecionada!")
-                except:
-                    # Tentar opção em cura-select-option
-                    page.click("cura-select-option >> nth=0")
-                    logger.info("  ✓ Primeira opção de especialidade selecionada")
-                
+                    # Tentar clicar pelo texto
+                    if page.is_visible(f"text={ESPECIALIDADE}"):
+                         page.click(f"text={ESPECIALIDADE}")
+                         specialty_selected = True
+                         logger.info(f"  ✓ Especialidade '{ESPECIALIDADE}' clicada via texto!")
+                    else:
+                         # Tentar clicar na primeira opção genérica
+                         page.click("cura-select-option >> nth=0")
+                         specialty_selected = True
+                         logger.info("  ✓ Primeira opção de especialidade clicada")
+                except Exception as e:
+                    logger.warning(f"  ⚠️ Falha ao clicar na opção: {e}")
+
                 page.wait_for_timeout(1000)
                 
-                # Clicar no botão "CONTINUE O AGENDAMENTO" (cura-button, NÃO button nativo!)
-                try:
-                    page.click("cura-button >> text=CONTINUE O AGENDAMENTO")
-                    logger.info("  ✓ Botão 'CONTINUE O AGENDAMENTO' clicado via cura-button")
-                except:
-                    # Fallback: tentar pelo texto direto
+                # Clicar no botão "CONTINUE O AGENDAMENTO"
+                # O botão é um web component cura-button. 
+                # Importante: Ele pode estar disabled se a seleção não funcionou.
+                
+                # 1. Verificar se está visível
+                btn_selector = "cura-button:has-text('CONTINUE')"
+                if not page.is_visible(btn_selector):
+                    btn_selector = "button:has-text('CONTINUE')" # Tenta nativo
+                    
+                if page.is_visible(btn_selector):
+                    # Tentar forçar clique via JS se o clique normal falhar
                     try:
-                        page.click("text=CONTINUE O AGENDAMENTO")
-                        logger.info("  ✓ Botão 'CONTINUE O AGENDAMENTO' clicado via text")
+                        page.wait_for_selector(btn_selector, state="visible", timeout=5000)
+                        page.click(btn_selector, timeout=2000)
+                        logger.info(f"  ✓ Botão 'CONTINUE' clicado via Playwright")
                     except:
-                        logger.error("  ❌ Botão 'CONTINUE O AGENDAMENTO' NÃO encontrado!")
-                        page.screenshot(path="error_step1_continue.png")
-                        browser.close()
-                        return []
+                        logger.warning("  ⚠️ Clique normal falhou, tentando via JavaScript...")
+                        page.evaluate(f"document.querySelector('{btn_selector}').click()")
+                        logger.info("  ✓ Botão 'CONTINUE' clicado via JS")
+                else:
+                    logger.error("  ❌ Botão 'CONTINUE O AGENDAMENTO' NÃO encontrado visualmente!")
+                    # Screenshot para debug
+                    page.screenshot(path="debug_no_continue_btn.png")
+                    browser.close()
+                    return []
                 
                 # Aguardar navegação para /paciente
                 logger.info("  ⏳ Aguardando navegação para página do paciente...")
@@ -458,55 +476,62 @@ class DisponibilidadeScraper:
                 logger.info("👤 Etapa 2: Dados do Paciente...")
                 page.wait_for_timeout(2000)
                 
+                # ==================================================================
+                # ETAPA 2: DADOS DO PACIENTE (Data Nascimento + Sexo Biológico)
+                # ==================================================================
+                logger.info("👤 Etapa 2: Dados do Paciente...")
+                page.wait_for_timeout(2000)
+                
                 # Preencher Data de Nascimento
-                # O campo é cura-input-text com input placeholder="dd/mm/aaaa"
                 data_nasc_sel = "input[placeholder='dd/mm/aaaa']"
                 try:
                     page.wait_for_selector(data_nasc_sel, timeout=10000)
                     page.click(data_nasc_sel)
-                    page.fill(data_nasc_sel, "")
-                    # Digitar sem barras - a máscara do campo adiciona automaticamente
-                    page.type(data_nasc_sel, "06051995", delay=80)
-                    page.press(data_nasc_sel, "Tab")
-                    logger.info("  ✍️ Data de nascimento preenchida: 06/05/1995")
+                    # Preenchimento forçado via JS para garantir eventos
+                    page.evaluate(f"""
+                        const input = document.querySelector("{data_nasc_sel}");
+                        input.value = "06051995";
+                        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        input.blur();
+                    """)
+                    logger.info("  ✍️ Data de nascimento preenchida via JS: 06/05/1995")
+                    page.wait_for_timeout(500)
                 except Exception as e:
                     logger.error(f"  ❌ Erro ao preencher data de nascimento: {e}")
                     page.screenshot(path="error_step2_birthdate.png")
                 
-                page.wait_for_timeout(500)
-                
                 # Selecionar Sexo Biológico  
-                # O campo é cura-select com input placeholder="Selecione o sexo biológico"
                 sexo_sel = "input[placeholder='Selecione o sexo biológico']"
                 try:
                     page.click(sexo_sel)
                     logger.info("  🚹 Dropdown de sexo aberto")
                     page.wait_for_timeout(500)
                     
-                    # Clicar em MASCULINO (cura-select-option)
-                    page.click("text=MASCULINO")
-                    logger.info("  ✓ Sexo MASCULINO selecionado")
-                except:
-                    try:
-                        # Fallback: tentar Masculino com M minúsculo
-                        page.click("text=Masculino")
-                        logger.info("  ✓ Sexo Masculino selecionado")
-                    except Exception as e:
-                        logger.error(f"  ❌ Erro ao selecionar sexo: {e}")
+                    if page.is_visible("text=MASCULINO"):
+                        page.click("text=MASCULINO")
+                        logger.info("  ✓ Sexo MASCULINO selecionado")
+                    else:
+                        page.click("cura-select-option >> nth=0") # Fallback
+                        logger.info("  ✓ Opção de sexo clicada (fallback)")
+
+                except Exception as e:
+                    logger.error(f"  ❌ Erro ao selecionar sexo: {e}")
                 
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(1000)
                 
-                # Clicar em PROSSIGA (cura-button)
+                # Clicar em PROSSIGA
+                btn_prossiga_sel = "cura-button:has-text('PROSSIGA')"
                 try:
-                    page.click("cura-button >> text=PROSSIGA")
-                    logger.info("  ➡️ Clicou em PROSSIGA (Dados Paciente)")
+                    if page.is_visible(btn_prossiga_sel):
+                         page.click(btn_prossiga_sel)
+                         logger.info("  ➡️ Clicou em PROSSIGA (Dados Paciente)")
+                    else:
+                         page.click("text=PROSSIGA")
+                         logger.info("  ➡️ Clicou em PROSSIGA via text")
                 except:
-                    try:
-                        page.click("text=PROSSIGA")
-                        logger.info("  ➡️ Clicou em PROSSIGA via text")
-                    except:
-                        logger.error("  ❌ Botão PROSSIGA não encontrado!")
-                        page.screenshot(path="error_step2_prossiga.png")
+                    logger.error("  ❌ Botão PROSSIGA não encontrado ou não clicável!")
+                    page.screenshot(path="error_step2_prossiga.png")
                 
                 # Aguardar navegação para /pagamento
                 logger.info("  ⏳ Aguardando navegação para página de pagamento...")
@@ -515,7 +540,6 @@ class DisponibilidadeScraper:
                     logger.info("  ✅ Navegou para página de pagamento!")
                 except:
                     logger.warning("  ⚠️ Timeout esperando pagamento, verificando estado atual...")
-                    page.wait_for_timeout(3000)
                 
                 # ==================================================================
                 # ETAPA 3: PAGAMENTO (Selecionar Particular)
@@ -524,33 +548,37 @@ class DisponibilidadeScraper:
                 page.wait_for_timeout(2000)
                 
                 # Clicar no dropdown de forma de pagamento
-                # cura-select com placeholder "Selecione..."
                 pagamento_sel = "input[placeholder='Selecione...']"
                 try:
+                    page.wait_for_selector(pagamento_sel, timeout=10000)
                     page.click(pagamento_sel)
                     logger.info("  Dropdown de pagamento aberto")
                     page.wait_for_timeout(500)
                     
                     # Selecionar "Particular"
-                    page.click("text=Particular")
-                    logger.info("  ✓ Selecionado: Particular")
+                    if page.is_visible("text=Particular"):
+                        page.click("text=Particular")
+                        logger.info("  ✓ Selecionado: Particular")
+                    else:
+                        page.click("cura-select-option >> nth=0")
+                        logger.info("  ✓ Selecionada primeira opção de pagamento (fallback)")
+                        
                 except Exception as e:
                     logger.error(f"  ❌ Erro ao selecionar pagamento: {e}")
                     page.screenshot(path="error_step3_pagamento.png")
                 
                 page.wait_for_timeout(1000)
                 
-                # Clicar em PROSSIGA (cura-button)
+                # Clicar em PROSSIGA
                 try:
-                    page.click("cura-button >> text=PROSSIGA")
-                    logger.info("  ➡️ Clicou em PROSSIGA (Pagamento)")
+                     if page.is_visible(btn_prossiga_sel):
+                         page.click(btn_prossiga_sel)
+                         logger.info("  ➡️ Clicou em PROSSIGA (Pagamento)")
+                     else:
+                         page.click("text=PROSSIGA")
                 except:
-                    try:
-                        page.click("text=PROSSIGA")
-                        logger.info("  ➡️ Clicou em PROSSIGA via text")
-                    except:
-                        logger.error("  ❌ Botão PROSSIGA não encontrado na etapa de pagamento!")
-                        page.screenshot(path="error_step3_prossiga.png")
+                    logger.error("  ❌ Botão PROSSIGA não encontrado na etapa de pagamento!")
+                    page.screenshot(path="error_step3_prossiga.png")
                 
                 # ==================================================================
                 # ETAPA 4: AGENDA - Capturar datas e horários
