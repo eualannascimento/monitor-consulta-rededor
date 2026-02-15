@@ -429,36 +429,83 @@ class DisponibilidadeScraper:
                             page.keyboard.press("Enter")
                 
                 # ==================================================================
-                # NAVEGAÇÃO
+                # NAVEGAÇÃO - DADOS DO PACIENTE
                 # ==================================================================
                 
-                # Tentar avançar se houver fluxo de "Dados do Paciente" (Data Nasc/Sexo)
-                # O site pode pedir isso antes de mostrar a agenda
                 logger.info("👤 Verificando se precisa preencher dados do paciente...")
                 page.wait_for_timeout(3000)
                 
-                if page.is_visible("text=Data de nascimento"):
-                    logger.info("  Preenchendo data de nascimento dummy...")
-                    # Preencher data de nascimento (use uma data genérica de adulto)
-                    inputs_data = page.query_selector_all("input[type='tel'], input[placeholder*='nascimento']")
+                # Preencher Data de Nascimento
+                if page.is_visible("text=Data de nascimento") or page.is_visible("input[placeholder*='nascimento']"):
+                    logger.info("  ✍️ Preenchendo data de nascimento: 06/05/1995")
+                    inputs_data = page.query_selector_all("input[type='tel'], input[placeholder*='nascimento'], input[name*='birth']")
                     if inputs_data:
-                        inputs_data[0].fill("01/01/1980")
+                        # Tenta limpar e preencher
+                        inputs_data[0].click()
+                        inputs_data[0].fill("06/05/1995")
+                    else:
+                        # Tenta digitar diretamente se não achar input específico
+                        page.keyboard.type("06051995")
                 
-                if page.is_visible("text=Sexo") or page.is_visible("text=Gênero"):
-                     logger.info("  Selecionando sexo/gênero...")
-                     # Tentar selecionar qualquer opção
-                     page.click("text=Masculino") if page.is_visible("text=Masculino") else None
-                     page.click("text=Feminino") if page.is_visible("text=Feminino") else None
+                # Selecionar Sexo
+                if page.is_visible("text=Sexo") or page.is_visible("text=Gênero") or page.is_visible("text=MASCULINO"):
+                     logger.info("  🚹 Selecionando sexo MASCULINO...")
+                     # Tenta clicar no dropdown se necessário
+                     if page.is_visible("text=Selecione") or page.is_visible("[role='combobox']"):
+                         page.click("[role='combobox']")
+                         page.wait_for_timeout(500)
+                     
+                     # Clica na opção Masculino
+                     if page.is_visible("text=MASCULINO"):
+                         page.click("text=MASCULINO")
+                     elif page.is_visible("text=Masculino"):
+                         page.click("text=Masculino")
 
-                # Tentar clicar em botões de "Próximo", "Continuar", "Confirmar"
-                logger.info("➡️ Tentando avançar fluxo...")
-                for btn_text in ["Continuar", "Próximo", "Confirmar", "Buscar", "Pesquisar"]:
+                # Clicar em "PROSSIGA" ou "Continuar" após dados
+                if page.is_visible("text=PROSSIGA"):
+                    page.click("text=PROSSIGA")
+                    logger.info("  ➡️ Clicou em PROSSIGA (Dados Paciente)")
+                    page.wait_for_timeout(2000)
+
+                # ==================================================================
+                # NAVEGAÇÃO - PAGAMENTO
+                # ==================================================================
+                
+                logger.info("💰 Verificando seleção de pagamento...")
+                page.wait_for_timeout(2000)
+                
+                # Selecionar "PARTICULAR"
+                # O site costuma ter um dropdown ou botões para convênio/particular
+                if page.is_visible("text=Selecione a forma de pagamento") or page.is_visible("text=Particular"):
+                    logger.info("  Selecioando pagamento PARTICULAR...")
+                    
+                    # Se tiver dropdown, clica nele
+                    if page.is_visible("text=Selecione a forma de pagamento"):
+                        page.click("text=Selecione a forma de pagamento")
+                        page.wait_for_timeout(500)
+                    
+                    # Clica em Particular
+                    if page.is_visible("text=PARTICULAR"):
+                        page.click("text=PARTICULAR")
+                        logger.info("  ✓ Selecionado PARTICULAR")
+                    elif page.is_visible("text=Particular"):
+                        page.click("text=Particular")
+                        logger.info("  ✓ Selecionado Particular")
+                
+                # Clicar em "PROSSIGA" ou "Continuar" após pagamento
+                if page.is_visible("text=PROSSIGA"):
+                    page.click("text=PROSSIGA")
+                    logger.info("  ➡️ Clicou em PROSSIGA (Pagamento)")
+                    page.wait_for_timeout(2000)
+                
+                # Tentar avançar genérico se houver outros botões
+                logger.info("➡️ Tentando avançar fluxo final...")
+                for btn_text in ["Continuar", "Próximo", "Confirmar", "Buscar", "Pesquisar", "PROSSIGA"]:
                     try:
-                        btns = page.get_by_text(btn_text)
-                        if btns.count() > 0:
-                            if btns.first.is_visible():
-                                btns.first.click()
-                                page.wait_for_timeout(1000)
+                        # Tenta clicar apenas se visível e habilitado
+                        if page.is_visible(f"text={btn_text}"):
+                            page.click(f"text={btn_text}")
+                            page.wait_for_timeout(1000)
                     except:
                         pass
 
@@ -585,7 +632,7 @@ class MonitorConsulta:
                     except ValueError:
                         continue
 
-                if data_horario is not None and data_horario < data_consulta_obj:
+                if data_horario and data_horario < data_consulta_obj:
                     horarios_antes.append(horario)
                     logger.info(
                         f"✨ Horário anterior encontrado: {horario.data} às {horario.hora}"
