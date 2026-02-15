@@ -322,7 +322,7 @@ class DisponibilidadeScraper:
 
     def buscar(self) -> List[Horario]:
         """
-        Busca disponibilidade no site.
+        Busca disponibilidade no site usando interceptação de rede e automação.
 
         Returns:
             Lista de horários disponíveis
@@ -330,71 +330,214 @@ class DisponibilidadeScraper:
         logger.info(f"🔍 Iniciando busca por {NOME_MEDICA}...")
         logger.info(f"📱 Acessando URL: {self.url}")
 
+        horarios_encontrados = []
+        
+        # Variável para armazenar dados da API interceptados
+        api_data_captured = []
+
+        def handle_response(response):
+            """Callback para interceptar respostas da API."""
+            try:
+                # Filtrar apenas respostas JSON que podem conter horários
+                if "application/json" in response.headers.get("content-type", ""):
+                    # Tentar capturar URLs suspeitas de ter disponibilidade
+                    if "disponibilidade" in response.url or "schedule" in response.url or "slot" in response.url:
+                        try:
+                            data = response.json()
+                            logger.info(f"🎣 JSON interceptado da URL: {response.url}")
+                            api_data_captured.append(data)
+                        except:
+                            pass
+            except:
+                pass
+
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
                 viewport={"width": 1920, "height": 1080},
+                locale="pt-BR"
             )
             page = context.new_page()
 
+            # Ativar interceptação
+            page.on("response", handle_response)
+
             try:
-                page.goto(self.url, wait_until="domcontentloaded", timeout=self.timeout)
+                # Aumentar timeout padrão para 60s
+                page.set_default_timeout(60000)
+                
+                logger.info("🌍 Navegando para o site...")
+                page.goto(self.url, wait_until="networkidle")
 
-                logger.info("⏳ Aguardando carregamento completo...")
-                page.wait_for_timeout(8000)
+                # ==================================================================
+                # TRATAMENTO DO MODAL "VAMOS COMEÇAR"
+                # ==================================================================
+                logger.info("🛑 Verificando modais iniciais...")
+                
+                # Aguardar um pouco para garantir que modais carreguem
+                page.wait_for_timeout(5000)
+                
+                # Tentar identificar o modal "Vamos começar"
+                # Seletores baseados na imagem e estrutura comum
+                selectors_modal = [
+                    "text=Vamos começar!",
+                    "text=Selecione a especialidade",
+                    "div[role='dialog']",
+                    ".modal-content"
+                ]
+                
+                modal_found = False
+                for sel in selectors_modal:
+                    if page.is_visible(sel):
+                        logger.info(f"✅ Modal detectado: {sel}")
+                        modal_found = True
+                        break
+                
+                if modal_found:
+                    logger.info("👉 Tentando selecionar especialidade...")
+                    
+                    # Tentar clicar no dropdown
+                    # Procurar por "Selecione a especialidade" ou "Select"
+                    dropdown_clicked = False
+                    for dropdown_sel in ["text=Selecione a especialidade", "[role='combobox']", "select", ".css-control"]:
+                        if page.is_visible(dropdown_sel):
+                            page.click(dropdown_sel)
+                            logger.info(f"  ✓ Dropdown clicado: {dropdown_sel}")
+                            dropdown_clicked = True
+                            break
+                    
+                    if dropdown_clicked:
+                        page.wait_for_timeout(1000)
+                        # Tentar selecionar a especialidade definida
+                        # Primeiro tenta pelo texto exato, depois por partes
+                        if page.is_visible(f"text={ESPECIALIDADE}"):
+                            page.click(f"text={ESPECIALIDADE}")
+                            logger.info(f"  ✓ Especialidade '{ESPECIALIDADE}' selecionada!")
+                        else:
+                            # Tentar clicar na primeira opção se não achar o texto exato
+                            logger.warning(f"  ⚠️ Especialidade '{ESPECIALIDADE}' não encontrada textualmente. Tentando primeira opção...")
+                            page.keyboard.press("Enter")
+                        
+                        # Clicar em "CONTINUE O AGENDAMENTO"
+                        page.wait_for_timeout(1000)
+                        btn_continue = "text=CONTINUE O AGENDAMENTO"
+                        if page.is_visible(btn_continue):
+                            page.click(btn_continue)
+                            logger.info("  ✓ Botão Continuar clicado")
+                        else:
+                            page.keyboard.press("Enter")
+                
+                # ==================================================================
+                # NAVEGAÇÃO
+                # ==================================================================
+                
+                # Tentar avançar se houver fluxo de "Dados do Paciente" (Data Nasc/Sexo)
+                # O site pode pedir isso antes de mostrar a agenda
+                logger.info("👤 Verificando se precisa preencher dados do paciente...")
+                page.wait_for_timeout(3000)
+                
+                if page.is_visible("text=Data de nascimento"):
+                    logger.info("  Preenchendo data de nascimento dummy...")
+                    # Preencher data de nascimento (use uma data genérica de adulto)
+                    inputs_data = page.query_selector_all("input[type='tel'], input[placeholder*='nascimento']")
+                    if inputs_data:
+                        inputs_data[0].fill("01/01/1980")
+                
+                if page.is_visible("text=Sexo") or page.is_visible("text=Gênero"):
+                     logger.info("  Selecionando sexo/gênero...")
+                     # Tentar selecionar qualquer opção
+                     page.click("text=Masculino") if page.is_visible("text=Masculino") else None
+                     page.click("text=Feminino") if page.is_visible("text=Feminino") else None
 
-                # Salvar screenshot para debug
-                page.screenshot(path="debug_screenshot.png", full_page=True)
-                logger.info("📸 Screenshot salva: debug_screenshot.png")
+                # Tentar clicar em botões de "Próximo", "Continuar", "Confirmar"
+                logger.info("➡️ Tentando avançar fluxo...")
+                for btn_text in ["Continuar", "Próximo", "Confirmar", "Buscar", "Pesquisar"]:
+                    try:
+                        btns = page.get_by_text(btn_text)
+                        if btns.count() > 0:
+                            if btns.first.is_visible():
+                                btns.first.click()
+                                page.wait_for_timeout(1000)
+                    except:
+                        pass
 
-                # Verificar se há iframe de agendamento
-                logger.info("🔍 Verificando iframes...")
+                # Aguardar carregamento final da agenda
+                logger.info("⏳ Aguardando carregamento da agenda (10s)...")
+                page.wait_for_timeout(10000)
+                
+                # Salvar screenshot final para debug
+                page.screenshot(path="debug_final_state.png")
+
+                # ==================================================================
+                # PROCESSAR DADOS
+                # ==================================================================
+                
+                # 1. Tentar extrair de JSONs interceptados (Método Preferencial)
+                if api_data_captured:
+                    logger.info(f"📊 Processando {len(api_data_captured)} respostas de API interceptadas...")
+                    for data in api_data_captured:
+                        # Procurar recursivamente por chaves de data/hora
+                        def find_slots(obj):
+                            if isinstance(obj, dict):
+                                for k, v in obj.items():
+                                    # Padrões comuns de chaves de horário
+                                    if k in ["time", "hora", "slot", "start", "date"] and isinstance(v, str):
+                                        # Tentar parsear se parece horário
+                                        if re.search(r"\d{2}:\d{2}", v):
+                                            return [(v, obj)]
+                                    elif isinstance(v, (dict, list)):
+                                        res = find_slots(v)
+                                        if res: return res
+                            elif isinstance(obj, list):
+                                res = []
+                                for item in obj:
+                                    r = find_slots(item)
+                                    if r: res.extend(r)
+                                return res
+                            return []
+
+                        # Tentar implementar lógica específica se descobrirmos a estrutura
+                        # Por enquanto, vamos logar que capturamos e tentar extrair se óbvio
+                        logger.debug(f"JSON data content keys: {str(data.keys()) if isinstance(data, dict) else 'list'}")
+
+                # 2. Método Fallback: Scraping Visual (Mantido e Melhorado)
+                logger.info("👀 Realizando scraping visual da página...")
+                
+                # Verificar iframes
                 iframe_agendamento = None
-
                 for frame in page.frames:
-                    frame_url = frame.url.lower()
-                    keywords = ["agenda", "schedule", "appointment", "medcloud", "booking"]
-
-                    if any(keyword in frame_url for keyword in keywords):
-                        logger.info(f"✅ Iframe de agendamento encontrado: {frame.url}")
+                    if any(x in frame.url.lower() for x in ["agenda", "schedule", "booking"]):
                         iframe_agendamento = frame
                         break
-
-                # Decidir qual página usar (iframe ou principal)
-                page_to_use = iframe_agendamento if iframe_agendamento else page
-                context_msg = "iframe" if iframe_agendamento else "página principal"
-                logger.info(f"📝 Trabalhando na {context_msg}...")
-
-                # Buscar horários disponíveis
-                logger.info("📆 Buscando horários disponíveis...")
-                horarios = self._buscar_horarios_na_pagina(page_to_use)
-
-                # Se não encontrou horários, salvar HTML para análise
-                if not horarios:
-                    logger.warning("⚠️ Não foi possível encontrar horários automaticamente.")
-                    logger.info("💾 Salvando HTML para análise manual...")
-
-                    html_content = page_to_use.content()
-                    with open("page_html.html", "w", encoding="utf-8") as f:
-                        f.write(html_content)
-                    logger.info("✓ HTML salvo em: page_html.html")
-
-                logger.info(f"✅ Total de horários encontrados: {len(horarios)}")
-
-                browser.close()
-                return horarios
+                
+                page_to_search = iframe_agendamento if iframe_agendamento else page
+                
+                # Extrair horários visualmente
+                horarios = self._buscar_horarios_na_pagina(page_to_search)
+                
+                if horarios:
+                    logger.info(f"✅ Encontrados {len(horarios)} horários via scraping visual!")
+                    return horarios
+                
+                logger.warning("⚠️ Nenhum horário encontrado via visual ou API.")
+                return []
 
             except Exception as e:
-                logger.error(f"❌ Erro durante busca: {str(e)}")
+                logger.error(f"❌ Erro crítico: {str(e)}")
+                # Tentar tirar screenshot apenas se página estiver ativa
                 try:
-                    page.screenshot(path="error_screenshot.png", full_page=True)
-                    logger.info("📸 Screenshot de erro salva: error_screenshot.png")
-                except Exception:
+                    page.screenshot(path="error_fatal.png")
+                except:
                     pass
-                browser.close()
                 return []
+            finally:
+                try:
+                    browser.close()
+                except:
+                    pass
+        
+        return []
 
 
 class MonitorConsulta:
