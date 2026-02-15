@@ -614,29 +614,75 @@ class MonitorConsulta:
         try:
             data_consulta_obj = datetime.strptime(data_limite, "%Y-%m-%d")
         except ValueError:
-            logger.error(f"❌ Data inválida: {data_limite}")
+            logger.error(f"❌ Data limite inválida: {data_limite}")
             return []
 
         horarios_antes = []
+        
+        # Mapeamento de meses em português
+        meses_pt = {
+            "janeiro": 1, "fevereiro": 2, "março": 3, "abril": 4, "maio": 5, "junho": 6,
+            "julho": 7, "agosto": 8, "setembro": 9, "outubro": 10, "novembro": 11, "dezembro": 12,
+            "jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6,
+            "jul": 7, "ago": 8, "set": 9, "out": 10, "nov": 11, "dez": 12
+        }
+
+        logger.info(f"🔎 Verificando {len(horarios)} horários encontrados contra data limite: {data_limite}")
 
         for horario in horarios:
             try:
-                # Tentar converter data do horário (diferentes formatos possíveis)
-                formatos = ["%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y"]
-
                 data_horario: Optional[datetime] = None
+                data_str = horario.data.lower().strip()
+                
+                # 1. Tentar parser numérico direto
+                formatos = ["%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y", "%Y-%m-%d"]
                 for formato in formatos:
                     try:
-                        data_horario = datetime.strptime(horario.data, formato)
+                        data_horario = datetime.strptime(data_str, formato)
                         break
                     except ValueError:
                         continue
+                
+                # 2. Se falhar, tentar parser textual (ex: "20 de outubro")
+                if data_horario is None:
+                    # Remover dia da semana se houver (ex: "segunda, 20 de...")
+                    if "," in data_str:
+                        data_str = data_str.split(",", 1)[1].strip()
+                    
+                    # Procurar padrão "dia de mês"
+                    match = re.search(r"(\d{1,2})\s+(?:de\s+)?([a-zçã]+)", data_str)
+                    if match:
+                        dia = int(match.group(1))
+                        mes_nome = match.group(2)
+                        # Tentar mapear nome do mês
+                        mes_num = next((v for k, v in meses_pt.items() if k in mes_nome), None)
+                        
+                        if mes_num:
+                            # Assumir ano atual ou próximo (logica simples)
+                            ano_atual = datetime.now().year
+                            mes_atual = datetime.now().month
+                            
+                            # Se o mês encontrado for menor que o mês atual, provavelmente é ano que vem
+                            ano = ano_atual
+                            if mes_num < mes_atual: 
+                                ano += 1
+                                
+                            data_horario = datetime(ano, mes_num, dia)
 
-                if data_horario and data_horario < data_consulta_obj:
-                    horarios_antes.append(horario)
-                    logger.info(
-                        f"✨ Horário anterior encontrado: {horario.data} às {horario.hora}"
-                    )
+                # Verificação final
+                if data_horario:
+                    # Comparação
+                    if data_horario.date() < data_consulta_obj.date():
+                        horarios_antes.append(horario)
+                        logger.info(
+                            f"  ✅ ENCONTRADO! {data_horario.strftime('%d/%m/%Y')} é ANTES de {data_consulta_obj.strftime('%d/%m/%Y')}"
+                        )
+                    else:
+                        logger.info(
+                            f"  ❌ Ignorado: {data_horario.strftime('%d/%m/%Y')} não é antes de {data_consulta_obj.strftime('%d/%m/%Y')}"
+                        )
+                else:
+                    logger.warning(f"  ⚠️ Não foi possível converter data: '{horario.data}'")
 
             except Exception as e:
                 logger.debug(f"Erro ao processar horário {horario.data}: {e}")
