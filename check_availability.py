@@ -23,7 +23,7 @@ NOME_MEDICA = "Isadora Leda Braga"  # Nome completo da médica
 ESPECIALIDADE = "Endocrinologia Geral"  # Especialidade
 LOCAL_ATENDIMENTO = "Hospital Villa Lobos"  # Local de atendimento
 DATA_CONSULTA_ATUAL = "2026-03-11"  # Data da consulta já agendada (formato YYYY-MM-DD)
-EMAIL_DESTINO = "classificavagas@gmail.com"  # Seu email para receber notificações
+EMAIL_DESTINO = "oquealan@gmail.com"  # Seu email para receber notificações
 
 # ID da médica no sistema (obtido do site)
 MEDICA_ID = "725717342"  # ID da Dra. Isadora no sistema
