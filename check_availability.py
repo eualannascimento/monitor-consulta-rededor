@@ -386,11 +386,13 @@ class DisponibilidadeScraper:
             page = context.new_page()
 
             try:
-                page.set_default_timeout(30000)
+                page.set_default_timeout(60000)
                 
                 logger.info("🌍 Navegando para o site...")
-                page.goto(self.url, wait_until="networkidle")
-                page.wait_for_timeout(3000)
+                # domcontentloaded em vez de networkidle — sites com analytics/tracking
+                # podem nunca atingir networkidle, causando timeout
+                page.goto(self.url, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(5000)
 
                 # ==================================================================
                 # ETAPA 1: MODAL "VAMOS COMEÇAR" - Selecionar Especialidade
