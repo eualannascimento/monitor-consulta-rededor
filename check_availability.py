@@ -320,9 +320,55 @@ class DisponibilidadeScraper:
 
         return horarios_encontrados
 
+    def _extrair_data_calendario(self, page, mes_ano_text: str) -> str:
+        """
+        Extrai a data atualmente selecionada no calendário da agenda.
+        
+        Args:
+            page: Página do Playwright
+            mes_ano_text: Texto do mês/ano visível (ex: "Mar, 2026")
+        
+        Returns:
+            Data formatada como dd/mm/yyyy
+        """
+        meses_abrev = {
+            "Jan": 1, "Fev": 2, "Mar": 3, "Abr": 4, "Mai": 5, "Jun": 6,
+            "Jul": 7, "Ago": 8, "Set": 9, "Out": 10, "Nov": 11, "Dez": 12
+        }
+        
+        try:
+            # Tentar extrair mês e ano do texto (ex: "Mar, 2026")
+            if mes_ano_text:
+                match = re.match(r"([A-Za-z]+),?\s*(\d{4})", mes_ano_text)
+                if match:
+                    mes_str = str(match.group(1)).capitalize()
+                    mes_nome = mes_str[:3]
+                    ano = int(match.group(2))
+                    mes = meses_abrev.get(mes_nome, datetime.now().month)
+                    
+                    # Tentar encontrar o dia selecionado (highlighted/active)
+                    # Na Rede D'Or, o dia selecionado tem classe especial
+                    dia = datetime.now().day
+                    try:
+                        # Buscar elementos com algum estado ativo/selecionado
+                        selected = page.query_selector("[class*='selected'], [class*='active'], [class*='highlight'], [aria-selected='true']")
+                        if selected:
+                            texto_dia = selected.inner_text().strip()
+                            if texto_dia.isdigit():
+                                dia = int(texto_dia)
+                    except:
+                        pass
+                    
+                    return f"{dia:02d}/{mes:02d}/{ano}"
+        except:
+            pass
+        
+        return datetime.now().strftime("%d/%m/%Y")
+
     def buscar(self) -> List[Horario]:
         """
-        Busca disponibilidade no site usando interceptação de rede e automação.
+        Busca disponibilidade no site usando automação com seletores
+        de Web Components cura-* mapeados manualmente no browser real.
 
         Returns:
             Lista de horários disponíveis
@@ -330,286 +376,289 @@ class DisponibilidadeScraper:
         logger.info(f"🔍 Iniciando busca por {NOME_MEDICA}...")
         logger.info(f"📱 Acessando URL: {self.url}")
 
-        horarios_encontrados = []
-        
-        # Variável para armazenar dados da API interceptados
-        api_data_captured = []
-
-        def handle_response(response):
-            """Callback para interceptar respostas da API."""
-            try:
-                # Filtrar apenas respostas JSON que podem conter horários
-                if "application/json" in response.headers.get("content-type", ""):
-                    # Tentar capturar URLs suspeitas de ter disponibilidade
-                    if "disponibilidade" in response.url or "schedule" in response.url or "slot" in response.url:
-                        try:
-                            data = response.json()
-                            logger.info(f"🎣 JSON interceptado da URL: {response.url}")
-                            api_data_captured.append(data)
-                        except:
-                            pass
-            except:
-                pass
-
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                viewport={"width": 1920, "height": 1080},
+                viewport={"width": 1280, "height": 900},
                 locale="pt-BR"
             )
             page = context.new_page()
 
-            # Ativar interceptação
-            page.on("response", handle_response)
-
             try:
-                # Aumentar timeout padrão para 60s
-                page.set_default_timeout(60000)
+                page.set_default_timeout(30000)
                 
                 logger.info("🌍 Navegando para o site...")
                 page.goto(self.url, wait_until="networkidle")
+                page.wait_for_timeout(3000)
 
                 # ==================================================================
-                # TRATAMENTO DO MODAL "VAMOS COMEÇAR"
+                # ETAPA 1: MODAL "VAMOS COMEÇAR" - Selecionar Especialidade
                 # ==================================================================
-                logger.info("🛑 Verificando modais iniciais...")
+                logger.info("🛑 Etapa 1: Modal de Especialidade...")
                 
-                # Aguardar um pouco para garantir que modais carreguem
-                page.wait_for_timeout(5000)
+                # Aguardar modal com texto "Vamos começar!"
+                try:
+                    page.wait_for_selector("text=Vamos começar!", timeout=10000)
+                    logger.info("  ✅ Modal 'Vamos começar!' detectado")
+                except:
+                    logger.warning("  ⚠️ Modal não detectado, tentando continuar mesmo assim...")
+
+                # Clicar no dropdown de especialidade (cura-select)
+                # O input interno tem placeholder "Selecione a especialidade"
+                dropdown_sel = "input[placeholder='Selecione a especialidade']"
+                try:
+                    page.click(dropdown_sel)
+                    logger.info("  ✓ Dropdown de especialidade clicado")
+                    page.wait_for_timeout(1000)
+                except:
+                    # Fallback: tentar role=combobox
+                    page.click("[role='combobox']")
+                    logger.info("  ✓ Dropdown clicado via [role='combobox']")
+                    page.wait_for_timeout(1000)
                 
-                # Tentar identificar o modal "Vamos começar"
-                # Seletores baseados na imagem e estrutura comum
-                selectors_modal = [
-                    "text=Vamos começar!",
-                    "text=Selecione a especialidade",
-                    "div[role='dialog']",
-                    ".modal-content"
-                ]
+                # Selecionar "Endocrinologia Geral" (aparece como cura-select-option)
+                try:
+                    page.click(f"text={ESPECIALIDADE}")
+                    logger.info(f"  ✓ Especialidade '{ESPECIALIDADE}' selecionada!")
+                except:
+                    # Tentar opção em cura-select-option
+                    page.click("cura-select-option >> nth=0")
+                    logger.info("  ✓ Primeira opção de especialidade selecionada")
                 
-                modal_found = False
-                for sel in selectors_modal:
-                    if page.is_visible(sel):
-                        logger.info(f"✅ Modal detectado: {sel}")
-                        modal_found = True
-                        break
+                page.wait_for_timeout(1000)
                 
-                if modal_found:
-                    logger.info("👉 Tentando selecionar especialidade...")
-                    
-                    # Tentar clicar no dropdown
-                    # Procurar por "Selecione a especialidade" ou "Select"
-                    dropdown_clicked = False
-                    for dropdown_sel in ["text=Selecione a especialidade", "[role='combobox']", "select", ".css-control"]:
-                        if page.is_visible(dropdown_sel):
-                            page.click(dropdown_sel)
-                            logger.info(f"  ✓ Dropdown clicado: {dropdown_sel}")
-                            dropdown_clicked = True
-                            break
-                    
-                    if dropdown_clicked:
-                        page.wait_for_timeout(1000)
-                        # Tentar selecionar a especialidade definida
-                        # Primeiro tenta pelo texto exato, depois por partes
-                        if page.is_visible(f"text={ESPECIALIDADE}"):
-                            page.click(f"text={ESPECIALIDADE}")
-                            logger.info(f"  ✓ Especialidade '{ESPECIALIDADE}' selecionada!")
-                        else:
-                            # Tentar clicar na primeira opção se não achar o texto exato
-                            logger.warning(f"  ⚠️ Especialidade '{ESPECIALIDADE}' não encontrada textualmente. Tentando primeira opção...")
-                            page.keyboard.press("Enter")
-                        
-                        # Clicar em "CONTINUE O AGENDAMENTO"
-                        page.wait_for_timeout(1000)
-                        
-                        # Tenta múltiplos seletores para o botão de continuar do modal
-                        continuar_clicado = False
-                        seletores_btn = [
-                            "text=CONTINUE O AGENDAMENTO", 
-                            "text=CONTINUAR", 
-                            "button:has-text('CONTINUE')",
-                            "button:has-text('Continuar')",
-                            "button[type='submit']"
-                        ]
-                        
-                        for sel in seletores_btn:
-                            if page.is_visible(sel):
-                                page.click(sel)
-                                logger.info(f"  ✓ Botão de avançar clicado: {sel}")
-                                continuar_clicado = True
-                                break
-                        
-                        if not continuar_clicado:
-                             logger.warning("  ⚠️ Botão de avançar não encontrado! Tentando Enter...")
-                             page.keyboard.press("Enter")
+                # Clicar no botão "CONTINUE O AGENDAMENTO" (cura-button, NÃO button nativo!)
+                try:
+                    page.click("cura-button >> text=CONTINUE O AGENDAMENTO")
+                    logger.info("  ✓ Botão 'CONTINUE O AGENDAMENTO' clicado via cura-button")
+                except:
+                    # Fallback: tentar pelo texto direto
+                    try:
+                        page.click("text=CONTINUE O AGENDAMENTO")
+                        logger.info("  ✓ Botão 'CONTINUE O AGENDAMENTO' clicado via text")
+                    except:
+                        logger.error("  ❌ Botão 'CONTINUE O AGENDAMENTO' NÃO encontrado!")
+                        page.screenshot(path="error_step1_continue.png")
+                        browser.close()
+                        return []
+                
+                # Aguardar navegação para /paciente
+                logger.info("  ⏳ Aguardando navegação para página do paciente...")
+                try:
+                    page.wait_for_url("**/paciente**", timeout=15000)
+                    logger.info("  ✅ Navegou para página do paciente!")
+                except:
+                    logger.warning("  ⚠️ Timeout esperando navegação, verificando estado atual...")
+                    page.wait_for_timeout(3000)
                 
                 # ==================================================================
-                # NAVEGAÇÃO - DADOS DO PACIENTE
+                # ETAPA 2: DADOS DO PACIENTE (Data Nascimento + Sexo Biológico)
                 # ==================================================================
-                
-                logger.info("👤 Verificando dados do paciente...")
-                page.wait_for_timeout(4000) # Wait maior para transição do modal
+                logger.info("👤 Etapa 2: Dados do Paciente...")
+                page.wait_for_timeout(2000)
                 
                 # Preencher Data de Nascimento
-                if page.is_visible("text=Data de nascimento") or page.is_visible("input[placeholder*='nascimento']"):
-                    logger.info("  ✍️ Preenchendo data de nascimento: 06/05/1995")
-                    inputs_data = page.query_selector_all("input[type='tel'], input[placeholder*='nascimento'], input[name*='birth']")
-                    if inputs_data:
-                        try:
-                            # Preenchimento robusto para React/Angular
-                            inputs_data[0].click()
-                            inputs_data[0].fill("")
-                            inputs_data[0].type("06051995", delay=100) # Digita devagar
-                            inputs_data[0].press("Tab") # Sai do campo para disparar validação
-                        except Exception as e:
-                            logger.error(f"Erro ao preencher data: {e}")
-                    else:
-                        page.keyboard.type("06051995")
-                else:
-                    logger.warning("  ⚠️ Campos de Data de Nascimento NÃO encontrados (pode estar na tela errada)")
+                # O campo é cura-input-text com input placeholder="dd/mm/aaaa"
+                data_nasc_sel = "input[placeholder='dd/mm/aaaa']"
+                try:
+                    page.wait_for_selector(data_nasc_sel, timeout=10000)
+                    page.click(data_nasc_sel)
+                    page.fill(data_nasc_sel, "")
+                    # Digitar sem barras - a máscara do campo adiciona automaticamente
+                    page.type(data_nasc_sel, "06051995", delay=80)
+                    page.press(data_nasc_sel, "Tab")
+                    logger.info("  ✍️ Data de nascimento preenchida: 06/05/1995")
+                except Exception as e:
+                    logger.error(f"  ❌ Erro ao preencher data de nascimento: {e}")
+                    page.screenshot(path="error_step2_birthdate.png")
                 
-                # Selecionar Sexo
-                if page.is_visible("text=Sexo") or page.is_visible("text=Gênero") or page.is_visible("text=MASCULINO"):
-                     logger.info("  🚹 Selecionando sexo MASCULINO...")
-                     
-                     # Tenta abrir dropdown
-                     comboboxes = page.query_selector_all("[role='combobox'], select")
-                     if comboboxes:
-                         for cb in comboboxes:
-                             if cb.is_visible():
-                                 cb.click()
-                                 break
-                     
-                     page.wait_for_timeout(500)
-                     
-                     # Clica na opção
-                     if page.is_visible("text=MASCULINO"):
-                         page.click("text=MASCULINO")
-                     elif page.is_visible("text=Masculino"):
-                         page.click("text=Masculino")
+                page.wait_for_timeout(500)
                 
-                # Clicar em "PROSSIGA" ou "Continuar" após dados
-                btn_prossiga_encontrado = False
-                for btn_txt in ["PROSSIGA", "CONTINUAR", "PRÓXIMO"]:
-                    if page.is_visible(f"text={btn_txt}"):
-                        page.click(f"text={btn_txt}")
-                        logger.info(f"  ➡️ Clicou em {btn_txt} (Dados Paciente)")
-                        btn_prossiga_encontrado = True
-                        break
-                
-                if not btn_prossiga_encontrado:
-                    logger.warning("  ⚠️ Botão PROSSIGA/CONTINUAR não encontrado após dados do paciente")
-
-                # ==================================================================
-                # NAVEGAÇÃO - PAGAMENTO
-                # ==================================================================
-                
-                logger.info("💰 Verificando seleção de pagamento...")
-                page.wait_for_timeout(3000)
-                
-                # Selecionar "PARTICULAR"
-                pagamento_encontrado = False
-                if page.is_visible("text=Selecione a forma de pagamento") or page.is_visible("text=Particular"):
-                    logger.info("  Selecionando pagamento PARTICULAR...")
+                # Selecionar Sexo Biológico  
+                # O campo é cura-select com input placeholder="Selecione o sexo biológico"
+                sexo_sel = "input[placeholder='Selecione o sexo biológico']"
+                try:
+                    page.click(sexo_sel)
+                    logger.info("  🚹 Dropdown de sexo aberto")
+                    page.wait_for_timeout(500)
                     
-                    if page.is_visible("text=Selecione a forma de pagamento"):
-                        page.click("text=Selecione a forma de pagamento")
-                        page.wait_for_timeout(500)
-                    
-                    if page.is_visible("text=PARTICULAR"):
-                        page.click("text=PARTICULAR")
-                        pagamento_encontrado = True
-                        logger.info("  ✓ Selecionado PARTICULAR")
-                    elif page.is_visible("text=Particular"):
-                        page.click("text=Particular")
-                        pagamento_encontrado = True
-                        logger.info("  ✓ Selecionado Particular")
-                
-                if not pagamento_encontrado:
-                     logger.warning("  ⚠️ Seleção de pagamento NÃO encontrada")
-                
-                # Clicar em "PROSSIGA" ou "Continuar" após pagamento
-                if page.is_visible("text=PROSSIGA"):
-                    page.click("text=PROSSIGA")
-                    logger.info("  ➡️ Clicou em PROSSIGA (Pagamento)")
-                    page.wait_for_timeout(2000)
-                
-                # Tentar avançar genérico se houver outros botões
-                logger.info("➡️ Tentando avançar fluxo final...")
-                for btn_text in ["Continuar", "Próximo", "Confirmar", "Buscar", "Pesquisar", "PROSSIGA"]:
+                    # Clicar em MASCULINO (cura-select-option)
+                    page.click("text=MASCULINO")
+                    logger.info("  ✓ Sexo MASCULINO selecionado")
+                except:
                     try:
-                        # Busca exata e parcial
-                        btns = page.get_by_text(btn_text)
-                        if btns.count() > 0 and btns.first.is_visible():
-                             btns.first.click()
-                             page.wait_for_timeout(1000)
+                        # Fallback: tentar Masculino com M minúsculo
+                        page.click("text=Masculino")
+                        logger.info("  ✓ Sexo Masculino selecionado")
+                    except Exception as e:
+                        logger.error(f"  ❌ Erro ao selecionar sexo: {e}")
+                
+                page.wait_for_timeout(500)
+                
+                # Clicar em PROSSIGA (cura-button)
+                try:
+                    page.click("cura-button >> text=PROSSIGA")
+                    logger.info("  ➡️ Clicou em PROSSIGA (Dados Paciente)")
+                except:
+                    try:
+                        page.click("text=PROSSIGA")
+                        logger.info("  ➡️ Clicou em PROSSIGA via text")
+                    except:
+                        logger.error("  ❌ Botão PROSSIGA não encontrado!")
+                        page.screenshot(path="error_step2_prossiga.png")
+                
+                # Aguardar navegação para /pagamento
+                logger.info("  ⏳ Aguardando navegação para página de pagamento...")
+                try:
+                    page.wait_for_url("**/pagamento**", timeout=15000)
+                    logger.info("  ✅ Navegou para página de pagamento!")
+                except:
+                    logger.warning("  ⚠️ Timeout esperando pagamento, verificando estado atual...")
+                    page.wait_for_timeout(3000)
+                
+                # ==================================================================
+                # ETAPA 3: PAGAMENTO (Selecionar Particular)
+                # ==================================================================
+                logger.info("💰 Etapa 3: Pagamento...")
+                page.wait_for_timeout(2000)
+                
+                # Clicar no dropdown de forma de pagamento
+                # cura-select com placeholder "Selecione..."
+                pagamento_sel = "input[placeholder='Selecione...']"
+                try:
+                    page.click(pagamento_sel)
+                    logger.info("  Dropdown de pagamento aberto")
+                    page.wait_for_timeout(500)
+                    
+                    # Selecionar "Particular"
+                    page.click("text=Particular")
+                    logger.info("  ✓ Selecionado: Particular")
+                except Exception as e:
+                    logger.error(f"  ❌ Erro ao selecionar pagamento: {e}")
+                    page.screenshot(path="error_step3_pagamento.png")
+                
+                page.wait_for_timeout(1000)
+                
+                # Clicar em PROSSIGA (cura-button)
+                try:
+                    page.click("cura-button >> text=PROSSIGA")
+                    logger.info("  ➡️ Clicou em PROSSIGA (Pagamento)")
+                except:
+                    try:
+                        page.click("text=PROSSIGA")
+                        logger.info("  ➡️ Clicou em PROSSIGA via text")
+                    except:
+                        logger.error("  ❌ Botão PROSSIGA não encontrado na etapa de pagamento!")
+                        page.screenshot(path="error_step3_prossiga.png")
+                
+                # ==================================================================
+                # ETAPA 4: AGENDA - Capturar datas e horários
+                # ==================================================================
+                logger.info("📅 Etapa 4: Agenda - Capturando horários...")
+                
+                # A agenda pode abrir em nova aba ou na mesma página
+                page.wait_for_timeout(5000)
+                
+                # Verificar se abriu nova aba
+                all_pages = context.pages
+                agenda_page = page
+                if len(all_pages) > 1:
+                    agenda_page = all_pages[-1]  # Pegar última aba aberta
+                    logger.info(f"  📑 Nova aba detectada! URL: {agenda_page.url}")
+                    agenda_page.wait_for_load_state("networkidle")
+                else:
+                    # Aguardar na mesma página
+                    try:
+                        page.wait_for_url("**/agenda**", timeout=10000)
+                        logger.info(f"  ✅ Navegou para agenda: {page.url}")
+                    except:
+                        logger.info(f"  📌 URL atual: {page.url}")
+                
+                agenda_page.wait_for_timeout(3000)
+                
+                # Salvar screenshot da agenda para debug
+                agenda_page.screenshot(path="debug_agenda.png")
+                logger.info("  📸 Screenshot da agenda salvo em debug_agenda.png")
+                
+                # CAPTURAR HORÁRIOS da agenda
+                # Os horários são exibidos como cura-button-outline com texto "HH:MM"
+                horarios_encontrados: List[Horario] = []
+                
+                # Primeiro, verificar qual data está selecionada no calendário
+                # O mês/ano é mostrado como texto (ex: "Mar, 2026")
+                mes_ano_text = ""
+                try:
+                    # Buscar o texto do mês/ano visível
+                    mes_elements = agenda_page.query_selector_all("text=/[A-Z][a-z]{2},\\s*\\d{4}/")
+                    if mes_elements:
+                        mes_ano_text = mes_elements[0].inner_text().strip()
+                        logger.info(f"  📆 Mês atual no calendário: {mes_ano_text}")
+                except:
+                    pass
+                
+                # Capturar datas disponíveis no calendário
+                # Datas disponíveis são divs clicáveis com números
+                # Vamos buscar todos os botões de horário (cura-button-outline)
+                horarios_btns = agenda_page.query_selector_all("cura-button-outline")
+                
+                if horarios_btns:
+                    logger.info(f"  🎯 Encontrados {len(horarios_btns)} slots de horário!")
+                    
+                    # Extrair a data selecionada atualmente
+                    data_selecionada = self._extrair_data_calendario(agenda_page, mes_ano_text)
+                    
+                    for btn in horarios_btns:
+                        try:
+                            texto = btn.inner_text().strip()
+                            # Verificar se parece com horário (HH:MM)
+                            hora_match = re.search(r"(\d{2}:\d{2})", texto)
+                            if hora_match:
+                                hora = hora_match.group(1)
+                                is_encaixe = "(E)" in texto or "E" in texto.replace(hora, "").strip()
+                                
+                                horario = Horario(
+                                    data=data_selecionada,
+                                    hora=hora,
+                                    texto_original=f"{data_selecionada} {hora}" + (" (Encaixe)" if is_encaixe else ""),
+                                )
+                                horarios_encontrados.append(horario)
+                                logger.info(f"    ⏰ {data_selecionada} às {hora}" + (" (Encaixe)" if is_encaixe else ""))
+                        except:
+                            continue
+                else:
+                    logger.warning("  ⚠️ Nenhum cura-button-outline encontrado. Tentando scraping visual...")
+                    
+                    # Fallback: buscar qualquer elemento com padrão HH:MM
+                    all_text = agenda_page.inner_text("body")
+                    hora_matches = re.findall(r"\b(\d{2}:\d{2})\b", all_text)
+                    if hora_matches:
+                        logger.info(f"  🔍 Encontrados {len(hora_matches)} padrões HH:MM via texto")
+                        for hora in hora_matches:
+                            horario = Horario(
+                                data=datetime.now().strftime("%d/%m/%Y"),
+                                hora=hora,
+                                texto_original=f"Horário: {hora}",
+                            )
+                            horarios_encontrados.append(horario)
+                            logger.info(f"    ⏰ Horário encontrado: {hora}")
+                
+                if horarios_encontrados:
+                    logger.info(f"✅ Total: {len(horarios_encontrados)} horários encontrados!")
+                else:
+                    logger.warning("⚠️ Nenhum horário encontrado na agenda.")
+                    # Log do conteúdo da página para debug
+                    try:
+                        page_text = agenda_page.inner_text("body")[:500]
+                        logger.info(f"  📄 Conteúdo visível (primeiros 500 chars): {page_text}")
                     except:
                         pass
-
-                # Aguardar carregamento final da agenda
-                logger.info("⏳ Aguardando carregamento da agenda (10s)...")
-                page.wait_for_timeout(10000)
                 
-                # Salvar screenshot final para debug
-                page.screenshot(path="debug_final_state.png")
-
-                # ==================================================================
-                # PROCESSAR DADOS
-                # ==================================================================
-                
-                # 1. Tentar extrair de JSONs interceptados (Método Preferencial)
-                if api_data_captured:
-                    logger.info(f"📊 Processando {len(api_data_captured)} respostas de API interceptadas...")
-                    for data in api_data_captured:
-                        # Procurar recursivamente por chaves de data/hora
-                        def find_slots(obj):
-                            if isinstance(obj, dict):
-                                for k, v in obj.items():
-                                    # Padrões comuns de chaves de horário
-                                    if k in ["time", "hora", "slot", "start", "date"] and isinstance(v, str):
-                                        # Tentar parsear se parece horário
-                                        if re.search(r"\d{2}:\d{2}", v):
-                                            return [(v, obj)]
-                                    elif isinstance(v, (dict, list)):
-                                        res = find_slots(v)
-                                        if res: return res
-                            elif isinstance(obj, list):
-                                res = []
-                                for item in obj:
-                                    r = find_slots(item)
-                                    if r: res.extend(r)
-                                return res
-                            return []
-
-                        # Tentar implementar lógica específica se descobrirmos a estrutura
-                        # Por enquanto, vamos logar que capturamos e tentar extrair se óbvio
-                        logger.debug(f"JSON data content keys: {str(data.keys()) if isinstance(data, dict) else 'list'}")
-
-                # 2. Método Fallback: Scraping Visual (Mantido e Melhorado)
-                logger.info("👀 Realizando scraping visual da página...")
-                
-                # Verificar iframes
-                iframe_agendamento = None
-                for frame in page.frames:
-                    if any(x in frame.url.lower() for x in ["agenda", "schedule", "booking"]):
-                        iframe_agendamento = frame
-                        break
-                
-                page_to_search = iframe_agendamento if iframe_agendamento else page
-                
-                # Extrair horários visualmente
-                horarios = self._buscar_horarios_na_pagina(page_to_search)
-                
-                if horarios:
-                    logger.info(f"✅ Encontrados {len(horarios)} horários via scraping visual!")
-                    return horarios
-                
-                logger.warning("⚠️ Nenhum horário encontrado via visual ou API.")
-                return []
+                browser.close()
+                return horarios_encontrados
 
             except Exception as e:
                 logger.error(f"❌ Erro crítico: {str(e)}")
-                # Tentar tirar screenshot apenas se página estiver ativa
                 try:
                     page.screenshot(path="error_fatal.png")
                 except:
