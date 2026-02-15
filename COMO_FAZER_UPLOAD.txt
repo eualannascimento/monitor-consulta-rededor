@@ -1,0 +1,134 @@
+📦 COMO FAZER UPLOAD DESTE PROJETO NO GITHUB
+=============================================
+
+Você tem este ZIP com todos os arquivos já organizados na estrutura correta!
+
+🚀 MÉTODO MAIS FÁCIL - Upload via Interface Web
+================================================
+
+1. Acesse: https://github.com/new
+   - Faça login se necessário
+
+2. Crie o repositório:
+   ✓ Repository name: monitor-consulta-rededor
+   ✓ Description: Monitor de disponibilidade de consultas Rede D'Or
+   ✓ Privado: ✅ (RECOMENDADO - para proteger seus dados)
+   ✓ NÃO marque "Add a README file" (já temos um)
+   ✓ Clique em "Create repository"
+
+3. Na página que abrir, procure:
+   "...or create a new repository on the command line"
+   
+   ⚠️ IGNORE os comandos por enquanto!
+
+4. Em vez disso, clique em:
+   "uploading an existing file" (link pequeno no meio da página)
+
+5. Arraste TODOS os arquivos desta pasta para a área de upload:
+   
+   ✓ check_availability.py
+   ✓ requirements.txt
+   ✓ README.md
+   ✓ .gitignore
+   ✓ GUIA_RAPIDO.txt
+   ✓ GUIA_AJUSTE_SELETORES.txt
+   ✓ .github/workflows/check_availability.yml  ← IMPORTANTE: manter estrutura de pastas!
+
+   💡 DICA: Você pode arrastar a pasta .github inteira!
+
+6. Escreva mensagem de commit:
+   "Configuração inicial do monitor de consultas"
+
+7. Clique em "Commit changes"
+
+✅ Repositório criado com sucesso!
+
+
+🔐 CONFIGURAR SECRETS (ESSENCIAL!)
+===================================
+
+Sem isso o script NÃO FUNCIONA!
+
+1. No repositório, vá em: Settings → Secrets and variables → Actions
+
+2. Clique "New repository secret" e crie:
+
+   Secret #1:
+   - Name: EMAIL_SENDER
+   - Value: seu-email@gmail.com
+   - Add secret
+
+   Secret #2:
+   - Name: EMAIL_PASSWORD
+   - Value: [senha de app do Gmail - 16 dígitos]
+   - Add secret
+
+📧 Como obter senha de app do Gmail:
+
+1. https://myaccount.google.com/security
+2. Ative "Verificação em duas etapas"
+3. https://myaccount.google.com/apppasswords
+4. App: Email | Dispositivo: Outro
+5. Nome: "GitHub Monitor"
+6. Copie os 16 dígitos
+7. Use no secret EMAIL_PASSWORD
+
+
+⚙️ ATIVAR GITHUB ACTIONS
+=========================
+
+1. Vá em: Actions (aba no topo)
+2. Clique: "I understand my workflows, go ahead and enable them"
+
+
+🧪 TESTAR PRIMEIRA EXECUÇÃO
+============================
+
+1. Actions → "Verificar Disponibilidade Consulta"
+2. Run workflow → Run workflow
+3. Aguarde 1-2 minutos
+4. Veja os logs
+
+⚠️ É NORMAL precisar ajustar seletores na primeira vez!
+   Leia GUIA_AJUSTE_SELETORES.txt se não encontrar horários.
+
+
+📝 EDITAR CONFIGURAÇÕES
+========================
+
+Você precisa editar apenas 1 linha:
+
+1. No repositório, abra: check_availability.py
+2. Clique no ícone de lápis (Edit)
+3. Procure por:
+   EMAIL_DESTINO = "seu-email@exemplo.com"
+4. Altere para seu email real
+5. Commit changes
+
+
+🎉 PRONTO! O sistema está funcionando!
+=======================================
+
+A cada 15 minutos ele verificará automaticamente.
+
+Você receberá email quando houver horários disponíveis antes de 11/03/2026.
+
+
+💡 DICAS FINAIS
+===============
+
+- Monitore as execuções em: Actions
+- Screenshots de debug ficam em: Artifacts
+- Ajuste a frequência editando: .github/workflows/check_availability.yml
+- Linha: cron: '*/15 * * * *'
+
+
+📞 PRECISA DE AJUDA?
+====================
+
+- Não encontrou horários? → GUIA_AJUSTE_SELETORES.txt
+- Dúvidas de configuração? → GUIA_RAPIDO.txt
+- Documentação completa? → README.md
+
+
+Boa sorte! 🍀

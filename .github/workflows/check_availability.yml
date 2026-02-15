@@ -1,0 +1,52 @@
+name: Verificar Disponibilidade Consulta
+
+on:
+  # Executar a cada 15 minutos
+  schedule:
+    - cron: '*/15 * * * *'  # A cada 15 minutos
+    # Dica: ajuste para horário comercial para economizar minutos do GitHub Actions
+    # Exemplo: '*/15 8-18 * * 1-5' = Seg-Sex, 8h-18h, a cada 15 min
+  
+  # Permite execução manual
+  workflow_dispatch:
+
+jobs:
+  check-availability:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout do código
+      uses: actions/checkout@v4
+    
+    - name: 🐍 Configurar Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'  # Cache de dependências pip
+    
+    - name: 📦 Instalar dependências
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        playwright install chromium
+        playwright install-deps chromium
+    
+    - name: 🔍 Verificar disponibilidade
+      env:
+        EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+      run: |
+        python check_availability.py
+    
+    - name: 📊 Upload screenshots e HTML (debug)
+      if: always()  # Executar mesmo se houver erro
+      uses: actions/upload-artifact@v4
+      with:
+        name: debug-screenshots-${{ github.run_number }}
+        path: |
+          debug_screenshot.png
+          error_screenshot.png
+          page_html.html
+        if-no-files-found: ignore
+        retention-days: 7  # Manter por 7 dias
+
