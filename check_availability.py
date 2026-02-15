@@ -421,76 +421,112 @@ class DisponibilidadeScraper:
                         
                         # Clicar em "CONTINUE O AGENDAMENTO"
                         page.wait_for_timeout(1000)
-                        btn_continue = "text=CONTINUE O AGENDAMENTO"
-                        if page.is_visible(btn_continue):
-                            page.click(btn_continue)
-                            logger.info("  ✓ Botão Continuar clicado")
-                        else:
-                            page.keyboard.press("Enter")
+                        
+                        # Tenta múltiplos seletores para o botão de continuar do modal
+                        continuar_clicado = False
+                        seletores_btn = [
+                            "text=CONTINUE O AGENDAMENTO", 
+                            "text=CONTINUAR", 
+                            "button:has-text('CONTINUE')",
+                            "button:has-text('Continuar')",
+                            "button[type='submit']"
+                        ]
+                        
+                        for sel in seletores_btn:
+                            if page.is_visible(sel):
+                                page.click(sel)
+                                logger.info(f"  ✓ Botão de avançar clicado: {sel}")
+                                continuar_clicado = True
+                                break
+                        
+                        if not continuar_clicado:
+                             logger.warning("  ⚠️ Botão de avançar não encontrado! Tentando Enter...")
+                             page.keyboard.press("Enter")
                 
                 # ==================================================================
                 # NAVEGAÇÃO - DADOS DO PACIENTE
                 # ==================================================================
                 
-                logger.info("👤 Verificando se precisa preencher dados do paciente...")
-                page.wait_for_timeout(3000)
+                logger.info("👤 Verificando dados do paciente...")
+                page.wait_for_timeout(4000) # Wait maior para transição do modal
                 
                 # Preencher Data de Nascimento
                 if page.is_visible("text=Data de nascimento") or page.is_visible("input[placeholder*='nascimento']"):
                     logger.info("  ✍️ Preenchendo data de nascimento: 06/05/1995")
                     inputs_data = page.query_selector_all("input[type='tel'], input[placeholder*='nascimento'], input[name*='birth']")
                     if inputs_data:
-                        # Tenta limpar e preencher
-                        inputs_data[0].click()
-                        inputs_data[0].fill("06/05/1995")
+                        try:
+                            # Preenchimento robusto para React/Angular
+                            inputs_data[0].click()
+                            inputs_data[0].fill("")
+                            inputs_data[0].type("06051995", delay=100) # Digita devagar
+                            inputs_data[0].press("Tab") # Sai do campo para disparar validação
+                        except Exception as e:
+                            logger.error(f"Erro ao preencher data: {e}")
                     else:
-                        # Tenta digitar diretamente se não achar input específico
                         page.keyboard.type("06051995")
+                else:
+                    logger.warning("  ⚠️ Campos de Data de Nascimento NÃO encontrados (pode estar na tela errada)")
                 
                 # Selecionar Sexo
                 if page.is_visible("text=Sexo") or page.is_visible("text=Gênero") or page.is_visible("text=MASCULINO"):
                      logger.info("  🚹 Selecionando sexo MASCULINO...")
-                     # Tenta clicar no dropdown se necessário
-                     if page.is_visible("text=Selecione") or page.is_visible("[role='combobox']"):
-                         page.click("[role='combobox']")
-                         page.wait_for_timeout(500)
                      
-                     # Clica na opção Masculino
+                     # Tenta abrir dropdown
+                     comboboxes = page.query_selector_all("[role='combobox'], select")
+                     if comboboxes:
+                         for cb in comboboxes:
+                             if cb.is_visible():
+                                 cb.click()
+                                 break
+                     
+                     page.wait_for_timeout(500)
+                     
+                     # Clica na opção
                      if page.is_visible("text=MASCULINO"):
                          page.click("text=MASCULINO")
                      elif page.is_visible("text=Masculino"):
                          page.click("text=Masculino")
-
+                
                 # Clicar em "PROSSIGA" ou "Continuar" após dados
-                if page.is_visible("text=PROSSIGA"):
-                    page.click("text=PROSSIGA")
-                    logger.info("  ➡️ Clicou em PROSSIGA (Dados Paciente)")
-                    page.wait_for_timeout(2000)
+                btn_prossiga_encontrado = False
+                for btn_txt in ["PROSSIGA", "CONTINUAR", "PRÓXIMO"]:
+                    if page.is_visible(f"text={btn_txt}"):
+                        page.click(f"text={btn_txt}")
+                        logger.info(f"  ➡️ Clicou em {btn_txt} (Dados Paciente)")
+                        btn_prossiga_encontrado = True
+                        break
+                
+                if not btn_prossiga_encontrado:
+                    logger.warning("  ⚠️ Botão PROSSIGA/CONTINUAR não encontrado após dados do paciente")
 
                 # ==================================================================
                 # NAVEGAÇÃO - PAGAMENTO
                 # ==================================================================
                 
                 logger.info("💰 Verificando seleção de pagamento...")
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(3000)
                 
                 # Selecionar "PARTICULAR"
-                # O site costuma ter um dropdown ou botões para convênio/particular
+                pagamento_encontrado = False
                 if page.is_visible("text=Selecione a forma de pagamento") or page.is_visible("text=Particular"):
-                    logger.info("  Selecioando pagamento PARTICULAR...")
+                    logger.info("  Selecionando pagamento PARTICULAR...")
                     
-                    # Se tiver dropdown, clica nele
                     if page.is_visible("text=Selecione a forma de pagamento"):
                         page.click("text=Selecione a forma de pagamento")
                         page.wait_for_timeout(500)
                     
-                    # Clica em Particular
                     if page.is_visible("text=PARTICULAR"):
                         page.click("text=PARTICULAR")
+                        pagamento_encontrado = True
                         logger.info("  ✓ Selecionado PARTICULAR")
                     elif page.is_visible("text=Particular"):
                         page.click("text=Particular")
+                        pagamento_encontrado = True
                         logger.info("  ✓ Selecionado Particular")
+                
+                if not pagamento_encontrado:
+                     logger.warning("  ⚠️ Seleção de pagamento NÃO encontrada")
                 
                 # Clicar em "PROSSIGA" ou "Continuar" após pagamento
                 if page.is_visible("text=PROSSIGA"):
@@ -502,10 +538,11 @@ class DisponibilidadeScraper:
                 logger.info("➡️ Tentando avançar fluxo final...")
                 for btn_text in ["Continuar", "Próximo", "Confirmar", "Buscar", "Pesquisar", "PROSSIGA"]:
                     try:
-                        # Tenta clicar apenas se visível e habilitado
-                        if page.is_visible(f"text={btn_text}"):
-                            page.click(f"text={btn_text}")
-                            page.wait_for_timeout(1000)
+                        # Busca exata e parcial
+                        btns = page.get_by_text(btn_text)
+                        if btns.count() > 0 and btns.first.is_visible():
+                             btns.first.click()
+                             page.wait_for_timeout(1000)
                     except:
                         pass
 
